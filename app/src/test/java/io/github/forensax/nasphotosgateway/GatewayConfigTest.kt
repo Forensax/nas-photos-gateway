@@ -28,4 +28,9 @@ class GatewayConfigTest {
         assertTrue(script.contains("printf '%s\\n' ${shellQuote(good.password)}"))
         assertFalse(RootScripts.environment(good, false).contains(good.password))
     }
+    @Test fun acceptsModuleVendorBinaryLayout() {
+        listOf("/vendor/bin/rclone", "/system/vendor/bin/rclone", "/system/bin/rclone", "/data/adb/modules/rclone/system/vendor/bin/rclone").forEach {
+            good.copy(rclonePath = it).validate()
+        }
+    }
 }

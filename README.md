@@ -35,7 +35,7 @@ Pixel 上的只读 NAS 照片网关，采用 Jetpack Compose + Magisk Root + rcl
 2. 群晖启用 SMB2/SMB3。为手机建立专用只读账号，仅授权待测试照片目录。先准备 10–20 张照片。
 3. 打开应用“设置”，填写 NAS IP、共享目录（如 `photo`）、账号、密码及 NAS 子目录（如 `TestPhotos`）。子目录使用相对路径，留空代表共享根目录。
 4. 挂载目录默认 `/storage/emulated/0/DCIM/NAS`。必须为空，并位于主用户 DCIM 的独立子目录；MVP 不支持工作资料或其他 Android 用户。
-5. rclone 默认 `/system/bin/rclone`，可修改为模块内的实际 rclone 路径。先保存，再到状态页“测试连接”，允许 Magisk Root 请求。
+5. rclone 默认 `/vendor/bin/rclone`（所引用模块的实际安装布局），可修改为模块内的实际 rclone 路径。先保存，再到状态页“测试连接”，允许 Magisk Root 请求。
 6. 在设置页点击“文件访问权限”：Android 11+ 开启“所有文件访问”；Android 9/10 允许存储访问。
 7. 点击“挂载”“刷新状态”，查看诊断。源目录与目标目录均应出现 `READONLY`。
 8. 点击“扫描媒体”。检查“已索引”和“可读取”是否一致；每次最多 500 个媒体 / 10000 个遍历条目，约 4 分钟软时限，深度上限 32。超限请缩小 NAS 子目录；重复扫描从头开始。

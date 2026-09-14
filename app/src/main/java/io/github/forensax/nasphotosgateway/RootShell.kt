@@ -28,7 +28,10 @@ class RootShell {
             } } catch (_: Exception) { /* Process cleanup may close this stream. */ }
         }
         try {
-            process.outputStream.bufferedWriter().use { it.write(script); it.write("\nexit\n") }
+            thread(isDaemon = true, name = "root-input") {
+                try { process.outputStream.bufferedWriter().use { it.write(script); it.write("\nexit\n") } }
+                catch (_: Exception) { /* Denied or timed-out su closes stdin. */ }
+            }
             if (!process.waitFor(seconds, TimeUnit.SECONDS)) {
                 process.destroyForcibly()
                 throw IllegalStateException("Root 操作超时；请刷新状态确认挂载结果，并检查 Magisk 授权或 NAS 网络")

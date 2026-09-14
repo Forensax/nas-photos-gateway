@@ -26,7 +26,8 @@ guard_path() {
 prepare_empty() {
     guard_path "$1"
     mkdir -p "$1"
-    [ -z "$(ls -A "$1")" ] || fail '挂载目录含有本地文件，请使用独立空目录'
+    contents=$(ls -A "$1") || fail '无法读取挂载目录，已停止操作'
+    [ -z "$contents" ] || fail '挂载目录含有本地文件，请使用独立空目录'
 }
 test_connection() {
     "$RCLONE" lsf "$REMOTE" --max-depth 1 --config /dev/null \

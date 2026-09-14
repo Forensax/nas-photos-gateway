@@ -7,7 +7,7 @@ data class GatewayConfig(
     val password: String = "",
     val subdirectory: String = "",
     val mountDirectory: String = "/storage/emulated/0/DCIM/NAS",
-    val rclonePath: String = "/system/bin/rclone",
+    val rclonePath: String = "/vendor/bin/rclone",
     val restoreAtBoot: Boolean = false,
 ) {
     fun validate() {
@@ -20,7 +20,7 @@ data class GatewayConfig(
         }
         require(!subdirectory.startsWith('/') && '\\' !in subdirectory && subdirectory.split('/').none { it == ".." || it == "." }) { "NAS 子目录必须为相对路径，不能包含 . 或 .." }
         require(validMountPath(mountDirectory)) { "挂载目录须为 /storage/emulated/0/DCIM/ 下的独立子目录；仅支持英文、数字、下划线和连字符" }
-        require(Regex("/(system/bin|data/adb/modules/[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*)/rclone").matches(rclonePath)) { "rclone 路径须在 /system/bin 或 /data/adb/modules 内" }
+        require(Regex("/(system/bin|vendor/bin|system/vendor/bin|data/adb/modules/[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*)/rclone").matches(rclonePath)) { "rclone 路径须在系统 bin 或 /data/adb/modules 内" }
     }
     val remote: String get() = "nas:$share" + subdirectory.trimEnd('/').let { if (it.isEmpty()) "" else "/$it" }
     companion object {

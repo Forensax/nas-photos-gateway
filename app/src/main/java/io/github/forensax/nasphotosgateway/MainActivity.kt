@@ -71,6 +71,8 @@ private fun StatusPage(state: GatewayState, model: GatewayViewModel) {
     var details by rememberSaveable { mutableStateOf(false) }
     Text(state.message, style = MaterialTheme.typography.bodyMedium)
     HorizontalDivider()
+    StatusLine("SMB", state.connectionStatus)
+    StatusLine("挂载", state.mountStatus)
     StatusLine("挂载保护", "只读 · 零磁盘 VFS 缓存")
     StatusLine("配置", if (state.configLocked) "挂载期间锁定" else "可编辑")
     StatusLine("Google Photos", "待实机验证")

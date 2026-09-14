@@ -7,7 +7,7 @@ object RootScripts {
         config.validate()
         return buildString {
             appendLine("set -eu")
-            appendLine("export PATH=/system/bin:/system/xbin:/data/adb/magisk:\$PATH")
+            appendLine("export PATH=/vendor/bin:/system/vendor/bin:/system/bin:/system/xbin:/data/adb/magisk:\$PATH")
             appendLine("TARGET=${shellQuote(config.mountDirectory)}")
             appendLine("SOURCE=${shellQuote(SOURCE)}")
             appendLine("RCLONE=${shellQuote(config.rclonePath)}")
