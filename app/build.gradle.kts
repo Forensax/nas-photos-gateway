@@ -13,6 +13,14 @@ android {
         versionCode = 3
         versionName = "0.1.2"
     }
+    providers.environmentVariable("NAS_GATEWAY_DEBUG_KEYSTORE_PATH").orNull?.let { keystorePath ->
+        signingConfigs.getByName("debug") {
+            storeFile = file(keystorePath)
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

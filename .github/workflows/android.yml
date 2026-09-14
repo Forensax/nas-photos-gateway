@@ -37,11 +37,24 @@ jobs:
             echo '::error::NAS_GATEWAY_DEBUG_KEYSTORE must be configured for distributable builds'
             exit 1
           fi
-          mkdir -p "$HOME/.android"
-          printf '%s' "$DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
-          chmod 600 "$HOME/.android/debug.keystore"
+          printf '%s' "$DEBUG_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/nas-gateway-debug.keystore"
+          chmod 600 "$RUNNER_TEMP/nas-gateway-debug.keystore"
+          printf 'NAS_GATEWAY_DEBUG_KEYSTORE_PATH=%s\n' "$RUNNER_TEMP/nas-gateway-debug.keystore" >> "$GITHUB_ENV"
       - name: Test, lint and assemble
         run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
+      - name: Verify APK signing certificate
+        run: |
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk" > "$RUNNER_TEMP/apk-signature.txt"
+          cat "$RUNNER_TEMP/apk-signature.txt"
+          if [ -n "${NAS_GATEWAY_DEBUG_KEYSTORE_PATH:-}" ]; then
+            expected=$(keytool -exportcert -alias androiddebugkey -storepass android -keystore "$NAS_GATEWAY_DEBUG_KEYSTORE_PATH" | sha256sum | cut -d ' ' -f 1)
+            actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/apk-signature.txt")
+            if [ "$expected" != "$actual" ]; then
+              echo '::error::APK was not signed with the persistent CI key'
+              exit 1
+            fi
+          fi
       - name: APK checksum
         run: |
           cd app/build/outputs/apk/debug
@@ -64,4 +77,4 @@ jobs:
           if-no-files-found: ignore
       - name: Remove signing material
         if: always()
-        run: rm -f "$HOME/.android/debug.keystore"
+        run: rm -f "$RUNNER_TEMP/nas-gateway-debug.keystore"

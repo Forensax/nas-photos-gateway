@@ -32,7 +32,9 @@ Android sdcardfs 设备检测 `/mnt/runtime/default/emulated` 的文件系统类
 
 扫描开始时，按可执行文件、remote、挂载目录和设备标记匹配唯一的 rclone mount 进程，向该进程发送 SIGHUP 刷新目录缓存；不会影响 rclone Web UI。随后由新的 rclone SMB 客户端递归读取完整 JSON 清单，独立于 FUSE 缓存。清单前后验证源与目标挂载 ID、设备号及进程，失败退出、截断、超大输出或不支持的路径均使扫描失败。
 
-现存媒体先验证文件可读，再交给媒体扫描器。扫描完整且无读取失败后，仅查询当前 DCIM 挂载范围内的图片和视频索引，对 SQL LIKE 中的下划线等字符进行转义。候选路径需在两次内容一致的完整 SMB 清单中均缺失；挂载标识必须一致。还需在应用视角逐层验证文件缺失，拒绝符号链接与权限/I/O 错误。每次提交缺失路径前再次验证挂载和文件状态。
+现存媒体先验证文件可读，再交给媒体扫描器。扫描完整且无读取失败后，查询当前 DCIM 挂载范围内的索引，只选择图片和视频作为清理候选，对 SQL LIKE 中的下划线等字符进行转义。候选路径需在两次内容一致的完整 SMB 清单中均缺失；挂载标识必须一致。还需在应用视角逐层验证文件缺失，拒绝符号链接与权限/I/O 错误。每次提交缺失路径前再次验证挂载和文件状态。
+
+Android 10 系统扫描器对缺失路径使用前缀查询；存在相同路径前缀的其他索引或远程条目时保留该候选。例如缺失 `a.jpg` 而仍有 `a.jpg.backup.png`，不能提交前者触发系统顺带清理后者。前缀碰撞检查同时覆盖非图片/视频索引。
 
 清理使用 `MediaScannerConnection.scanFile` 重新扫描确认缺失的路径，随后查询对应 MediaStore ID 是否消失；不调用 ContentResolver.delete 或文件删除操作。扫描回调超时会停止后续清理；系统异步扫描可能稍后完成。此操作不调用 Google Photos 云端 API。
 
@@ -43,6 +45,8 @@ Android sdcardfs 设备检测 `/mnt/runtime/default/emulated` 的文件系统类
 ## 构建验证
 
 Actions 在 Ubuntu + JDK 17 上验证官方 Gradle Wrapper，安装 SDK 35，执行危险路径/归属/只读脚本测试、Kotlin 参数校验单元测试、Lint 和 APK 构建。Gradle distribution 带 SHA-256，wrapper JAR 来自 Gradle v8.11.1 官方仓库且已对照官方校验值。
+
+分发构建从仓库 Secret 还原固定调试密钥，Gradle 通过显式路径使用该密钥；生成 APK 后使用 apksigner 验证签名，并将 APK 证书 SHA-256 与密钥证书比对。密钥不会进入构建产物，构建结束删除临时文件。
 
 CI 不包含 root Pixel、DSM、FUSE 真挂载或 Google Photos 测试。详见实机验收清单。
 
