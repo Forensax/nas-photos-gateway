@@ -1,6 +1,16 @@
 # Pixel 实机验收
 
-状态：待执行。CI 无法证明以下项目通过。
+状态：已完成 Pixel / Android 10 / Magisk 30.7 的单张 PNG 验证。其余清单保留为后续测试计划，CI 无法替代设备验证。
+
+## 2026-09-15 实测记录
+
+- NAS 文件：`20260808-204520.png`，583013 字节。
+- Root 路径完整读取 SHA-256：`63f651feb97d30ffb38e9b60bb0e288c1ebfa05d69ddb9ce65d1d3f83a5a8a58`。
+- 原版只绑定 storage 时，MediaProvider 报 `NoSuchFileException`，媒体库无对应记录。
+- 改为 runtime/default 共享映射后，Google Photos、MediaProvider 与网关进程均出现对应只读挂载。
+- MediaStore 登记为 image/png，文件大小匹配；Android 10 的 ExifInterface 对 PNG 提示格式警告，宽高列为空，但 Google Photos 解码正常并显示 667 × 732。
+- Google Photos 图片详情显示“已备份”“原始画质”“此内容不会占用您的账号存储空间”。这是该图片的界面状态，未单独审计上传流量或下载云端文件比对。
+- 全程保留 SELinux Enforcing，源文件与挂载保持只读。
 
 记录：Pixel 型号、Android build、Magisk 版本、rclone/FUSE 模块版本、Google Photos 版本、DSM 版本、网络环境。
 

@@ -24,7 +24,9 @@ jobs:
       - name: Install Android SDK
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
       - name: Root script safety tests
-        run: bash tests/root-safety.sh
+        run: |
+          bash tests/root-safety.sh
+          bash tests/runtime-bind.sh
       - name: Test, lint and assemble
         run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
       - name: APK checksum

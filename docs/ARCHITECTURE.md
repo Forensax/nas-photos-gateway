@@ -19,7 +19,9 @@
 
 FUSE 源目录固定为 `/mnt/nas-photos-gateway`，设备名固定为 `nas-photos-gateway`。检查 `/proc/self/mountinfo` 的目标路径、FUSE 类型、设备名和只读标志。重复挂载沿用已有匹配挂载。bind 失败时保留源挂载，用户可点击卸载清理；不会吞掉错误或自动删目录。
 
-卸载前验证源、目标均不存在外来或叠加挂载，然后先卸载 bind、再卸载源。常规卸载让 rclone daemon 正常结束。无强制卸载、`killall`、递归删除、`sync`、复制或 NAS 写入。
+Android sdcardfs 设备检测 `/mnt/runtime/default/emulated` 的文件系统类型，选择该共享父挂载内的目标目录。映射会传播至 default/read/write/full 和应用内的 storage 路径。已有旧版 storage 私有映射时，验证归属后迁移；迁移失败尝试恢复旧映射。其他设备保持直接 storage 映射，并保留实机验证要求。
+
+卸载前验证源、目标及所有 runtime 对应路径均不存在外来或叠加挂载，然后先卸载共享 bind，清理残留映射，最后卸载源。常规卸载让 rclone daemon 正常结束。无强制卸载、`killall`、递归删除、`sync`、复制或 NAS 写入。
 
 配置采用每应用 Keystore AES-GCM 密钥，IV 随机生成，应用数据备份关闭。rclone 密码经 stdin 交给 `obscure -`，仅在进程环境中保留可逆混淆形式。APK 不在磁盘上生成 rclone.conf，也不把账号密码加入进程命令参数。
 

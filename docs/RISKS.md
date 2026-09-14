@@ -1,6 +1,6 @@
 # 风险与边界
 
-1. **Google Photos 兼容性未实机验证。** Android 版本、Magisk 挂载隔离、FUSE、MediaProvider、SELinux 与 Google Photos 版本都影响可见性。Root 挂载成功、媒体索引成功、应用 URI 可读和云端备份成功是四项独立结果。
+1. **兼容性验证范围有限。** Pixel / Android 10 / Magisk 30.7 上的一张 PNG 已验证可读，Google Photos 显示已备份、原始画质。其他系统、文件格式和长时间运行仍待验证。Root 挂载成功、媒体索引成功、应用 URI 可读和云端备份成功是四项独立结果。
 2. **只读账号必须在 NAS 端配置。** 应用固定传入 rclone `--read-only` 并核对挂载只读标志；服务器权限是另一层独立保护。不要使用 NAS 管理员账号。应用不会删除 NAS 文件。
 3. **缓存并非整个手机零占用。** rclone 关闭 VFS 磁盘缓存，仍有每个文件的内存缓冲、内核缓存。Google Photos、MediaProvider 会产生缩略图、数据库和自身缓存，具体空间需实测。
 4. **视频和随机读取可能失败或变慢。** VFS 缓存关闭时，部分应用的读取方式依赖后端 seek 行为；大视频需要足够稳定的 NAS 与外网上传链路。

@@ -8,7 +8,9 @@ Pixel 上的只读 NAS 照片网关，采用 Jetpack Compose + Magisk Root + rcl
                        → MediaScannerConnection → MediaStore → Google Photos
 ```
 
-**MVP 能编译不代表 Google Photos 兼容已经验证。** 全局挂载可见性、SELinux、MediaProvider 和 Google Photos 的访问策略都需要在目标 Pixel 上验证；界面不会将挂载或索引成功显示为云端备份成功。
+**0.1.1 已在 Pixel / Android 10 / Magisk 30.7 上验证一张 NAS PNG。** Google Photos 能打开图片，详情显示已备份、原始画质；更多图片、视频、Android 版本及重启恢复仍需继续验证。界面不会将挂载或索引成功显示为云端备份成功。
+
+Android 9/10 的 sdcardfs 设备从 `/mnt/runtime/default/emulated/0/DCIM/NAS` 建立共享映射，再传播到各应用的 `/storage/emulated/0/DCIM/NAS`。直接只绑定 `/storage` 会出现 root 看得到、媒体服务看不到的问题。0.1.1 已修正该路径，并同步处理卸载与旧映射迁移。
 
 ## 功能
 

@@ -29,6 +29,44 @@ prepare_empty() {
     contents=$(ls -A "$1") || fail '无法读取挂载目录，已停止操作'
     [ -z "$contents" ] || fail '挂载目录含有本地文件，请使用独立空目录'
 }
+select_bindpoint() {
+    BINDPOINT="$TARGET"
+    RUNTIME_POINTS=""
+    # Android 9/10 sdcardfs exposes shared runtime mounts to app namespaces.
+    # /storage is a slave mount: binding there alone never propagates back.
+    if awk '$5=="/mnt/runtime/default/emulated" {for(i=7;i<=NF;i++) if($i=="-" && $(i+1)=="sdcardfs") ok=1} END {exit !ok}' "$MOUNTINFO"; then
+        relative=${TARGET#/storage/emulated/0}
+        BINDPOINT="/mnt/runtime/default/emulated/0$relative"
+        for mode in default read write full; do
+            RUNTIME_POINTS="$RUNTIME_POINTS /mnt/runtime/$mode/emulated/0$relative"
+        done
+    fi
+}
+guard_all_mounts() {
+    for point in "$SOURCE" "$TARGET" $RUNTIME_POINTS; do guard_mount "$point"; done
+}
+bind_gateway() {
+    select_bindpoint
+    guard_all_mounts
+    owned "$SOURCE" && readonly_mount "$SOURCE" || fail 'FUSE 挂载未通过只读检查'
+    if ! mounted "$BINDPOINT"; then
+        prepare_empty "$BINDPOINT"
+        migrated=false
+        if [ "$BINDPOINT" != "$TARGET" ] && mounted "$TARGET"; then
+            umount "$TARGET" || fail '旧映射正在使用，请稍后重试'
+            migrated=true
+        fi
+        if ! mount --bind "$SOURCE" "$BINDPOINT"; then
+            if [ "$migrated" = true ]; then mount --bind "$SOURCE" "$TARGET" || fail '映射恢复失败，请检查诊断'; fi
+            fail 'bind mount 失败；FUSE 已保留，可使用卸载清理'
+        fi
+        if ! readonly_mount "$BINDPOINT"; then
+            mount -o remount,bind,ro "$BINDPOINT" || fail '只读 bind 设置失败，请卸载后检查系统兼容性'
+        fi
+    fi
+    owned "$BINDPOINT" && readonly_mount "$BINDPOINT" || fail '共享 bind 挂载未通过只读检查'
+    owned "$TARGET" && readonly_mount "$TARGET" || fail '目录映射未传播到应用路径，请检查诊断'
+}
 test_connection() {
     "$RCLONE" lsf "$REMOTE" --max-depth 1 --config /dev/null \
         --contimeout 5s --timeout 15s --retries 1 --low-level-retries 1 >/dev/null
@@ -39,8 +77,8 @@ mount_gateway() {
     [ -c /dev/fuse ] || fail '设备缺少 /dev/fuse'
     guard_path "$SOURCE"
     guard_path "$TARGET"
-    guard_mount "$SOURCE"
-    guard_mount "$TARGET"
+    select_bindpoint
+    guard_all_mounts
     if ! mounted "$SOURCE"; then
         prepare_empty "$SOURCE"
         "$RCLONE" mount "$REMOTE" "$SOURCE" --config /dev/null \
@@ -50,32 +88,30 @@ mount_gateway() {
             --contimeout 5s --timeout 15s --retries 1 --low-level-retries 1 \
             --daemon --daemon-wait 20s --log-level ERROR
     fi
-    owned "$SOURCE" && readonly_mount "$SOURCE" || fail 'FUSE 挂载未通过只读检查'
-    if ! mounted "$TARGET"; then
-        prepare_empty "$TARGET"
-        if ! mount --bind "$SOURCE" "$TARGET"; then
-            echo 'bind mount 失败；FUSE 已保留，可使用卸载清理'
-            exit 21
-        fi
-        mount -o remount,bind,ro "$TARGET" || fail '只读 bind 设置失败，请卸载后检查系统兼容性'
-    fi
-    owned "$TARGET" && readonly_mount "$TARGET" || fail 'bind 挂载未通过只读检查，请卸载'
+    bind_gateway
     echo 'MOUNT_OK'
 }
 unmount_gateway() {
-    # Validate both before changing either. No lazy/force unmount and no deletion.
-    guard_mount "$TARGET"
-    guard_mount "$SOURCE"
-    if mounted "$TARGET"; then umount "$TARGET" || fail '目录被占用，请暂停 Google Photos 读取后重试'; fi
+    # Unmount the shared parent first so all app-visible replicas disappear.
+    select_bindpoint
+    guard_all_mounts
+    if mounted "$BINDPOINT"; then umount "$BINDPOINT" || fail '目录被占用，请暂停 Google Photos 读取后重试'; fi
+    for point in $RUNTIME_POINTS "$TARGET"; do
+        if mounted "$point"; then umount "$point" || fail '仍有目录映射被占用，请稍后重试'; fi
+    done
     if mounted "$SOURCE"; then umount "$SOURCE" || fail 'FUSE 被占用，请稍后重试'; fi
-    ! mounted "$TARGET" && ! mounted "$SOURCE" || fail '仍检测到挂载'
+    for point in "$SOURCE" "$TARGET" $RUNTIME_POINTS; do
+        if mounted "$point"; then fail '仍检测到挂载'; fi
+    done
     echo 'UNMOUNT_OK'
 }
 status_gateway() {
+    select_bindpoint
     echo "ROOT_UID=$(id -u)"
+    echo "BINDPOINT=$BINDPOINT"
     if [ -x "$RCLONE" ]; then "$RCLONE" version | head -n 1; else echo 'RCLONE_MISSING'; fi
     if [ -c /dev/fuse ]; then echo 'FUSE_DEVICE_OK'; else echo 'FUSE_DEVICE_MISSING'; fi
-    for point in "$SOURCE" "$TARGET"; do
+    for point in "$SOURCE" "$TARGET" $RUNTIME_POINTS; do
         if owned "$point"; then
             if readonly_mount "$point"; then echo "READONLY $point"; else echo "NOT_READONLY $point"; fi
         elif mounted "$point"; then echo "FOREIGN_MOUNT $point"

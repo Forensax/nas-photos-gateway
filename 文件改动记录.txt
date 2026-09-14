@@ -1,2 +1,4 @@
 NAS-Photos-Gateway_v1
 创建 Android MVP：Compose 状态/设置、加密配置、只读 Root 挂载、媒体扫描、开机恢复、文档、测试及 GitHub Actions APK 构建。
+NAS-Photos-Gateway_v2
+修正 Android 10 sdcardfs 共享目录映射、卸载及旧映射迁移；加入回归测试和 Pixel 单张图片的 MediaStore、Google Photos 实测记录。
