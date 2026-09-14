@@ -13,17 +13,22 @@ data class ShellResult(val code: Int, val output: String) {
 }
 
 class RootShell {
-    suspend fun run(script: String, seconds: Long = 90): ShellResult = withContext(Dispatchers.IO) {
+    suspend fun run(script: String, seconds: Long = 90, outputLimit: Int = 16384): ShellResult = withContext(Dispatchers.IO) {
         // Only a constant command appears in argv. Credentials travel over stdin.
         val process = ProcessBuilder("su", "-mm", "-c", "/system/bin/sh").redirectErrorStream(true).start()
         val output = StringBuilder()
+        var truncated = false
         val reader = thread(isDaemon = true, name = "root-output") {
             try { process.inputStream.bufferedReader().use { input ->
                 val buffer = CharArray(2048)
                 while (true) {
                     val count = input.read(buffer)
                     if (count < 0) break
-                    synchronized(output) { if (output.length < 16384) output.append(buffer, 0, minOf(count, 16384 - output.length)) }
+                    synchronized(output) {
+                        val available = outputLimit - output.length
+                        if (count > available) truncated = true
+                        if (available > 0) output.append(buffer, 0, minOf(count, available))
+                    }
                 }
             } } catch (_: Exception) { /* Process cleanup may close this stream. */ }
         }
@@ -37,6 +42,8 @@ class RootShell {
                 throw IllegalStateException("Root 操作超时；请刷新状态确认挂载结果，并检查 Magisk 授权或 NAS 网络")
             }
             reader.join(1000)
+            check(!reader.isAlive) { "Root 输出尚未结束，已停止操作" }
+            check(!synchronized(output) { truncated }) { "NAS 清单或命令输出超过上限，已停止操作；请缩小 NAS 子目录" }
             ShellResult(process.exitValue(), synchronized(output) { output.toString().trim() })
         } finally {
             process.destroy()

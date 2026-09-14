@@ -72,27 +72,34 @@ class GatewayRepository(private val context: Context) {
             }
             "status" -> { updateDiagnostics(config); report("状态已刷新") }
             "scan" -> {
-                val status = root(config, "status_gateway", false)
-                check(status.lineSequence().any { it == "READONLY ${config.mountDirectory}" }) { "请先建立只读挂载" }
-                mutable.value = mutable.value.copy(scan = "正在扫描")
                 val scanner = GatewayScanner(context)
+                check(scanner.hasPermission()) { "请先在设置页授予文件访问权限" }
+                mutable.value = mutable.value.copy(scan = "正在核对 NAS 实时清单")
                 val result = try {
-                    scanner.scan(config.mountDirectory) { progress ->
-                        mutable.value = mutable.value.copy(scan = progress)
-                    }
+                    val initial = RemoteSnapshot.parse(root(config, "prepare_scan", true, RemoteSnapshot.MAX_OUTPUT))
+                    mutable.value = mutable.value.copy(connectionStatus = "目录读取成功", scan = "正在扫描")
+                    scanner.scan(
+                        config.mountDirectory,
+                        initial,
+                        confirmSnapshot = { RemoteSnapshot.parse(root(config, "snapshot_gateway", true, RemoteSnapshot.MAX_OUTPUT)) },
+                        verifyMount = { expected ->
+                            check(root(config, "scan_identity", false).trim() == expected) { "挂载发生变化，已停止清理" }
+                        },
+                        progress = { progress -> mutable.value = mutable.value.copy(scan = progress) },
+                    )
                 } catch (error: Exception) {
                     mutable.value = mutable.value.copy(scan = "扫描中断\n${mutable.value.scan}")
                     throw error
                 }
                 mutable.value = mutable.value.copy(scan = result)
-                report("扫描已结束；云端备份结果请在 Google Photos 中确认")
+                report("媒体索引核对已结束；云端备份状态请在 Google Photos 中确认")
             }
             else -> error("未知操作")
         }
     }
-    private suspend fun root(config: GatewayConfig, function: String, credentials: Boolean): String {
+    private suspend fun root(config: GatewayConfig, function: String, credentials: Boolean, outputLimit: Int = 16384): String {
         val body = context.assets.open("gateway.sh").bufferedReader().use { it.readText() }
-        val result = shell.run(RootScripts.environment(config, credentials) + "\n" + body + "\n" + function)
+        val result = shell.run(RootScripts.environment(config, credentials) + "\n" + body + "\n" + function, outputLimit = outputLimit)
         // Parse machine markers before redaction: a password may itself be "READONLY".
         if (result.code != 0) result.copy(output = result.output.replace(config.password, "[已隐藏]")).checked()
         return result.output

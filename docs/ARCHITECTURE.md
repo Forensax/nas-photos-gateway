@@ -9,8 +9,9 @@
 | ConfigStore | Keystore AES-GCM、AtomicFile、无明文配置落盘 |
 | GatewayRepository | Mutex 串行化保存、挂载、卸载、扫描和恢复；状态流与错误反馈 |
 | RootShell / RootScripts | 固定 su 命令，脚本通过 stdin 输入；引用与校验用户参数 |
-| assets/gateway.sh | 连接测试、挂载归属检查、FUSE/bind、卸载与诊断 |
-| GatewayScanner | 普通应用视角遍历、逐文件扫描、URI 读取验证 |
+| assets/gateway.sh | 连接测试、挂载归属检查、FUSE/bind、卸载、精确刷新目录缓存与实时 SMB 清单 |
+| RemoteSnapshot / MediaIndexPolicy | 完整清单解析、挂载一致性校验、路径范围与删除候选筛选 |
+| GatewayScanner | 普通应用视角遍历、逐文件扫描、URI 读取验证与缺失路径重新扫描 |
 | BootReceiver / RestoreWorker | 解锁后系统广播入口、联网约束、最多三次退避恢复 |
 
 ## 挂载生命周期
@@ -29,7 +30,13 @@ Android sdcardfs 设备检测 `/mnt/runtime/default/emulated` 的文件系统类
 
 扫描使用本应用可见的 `/storage/emulated/0/DCIM/...`，随后交给 Android MediaScannerConnection。遍历不跟随符号链接，尊重 `.nomedia` 和隐藏目录；只处理常见媒体扩展名。索引后的每个 URI 会尝试读取一个字节。这只能证明当前应用的 URI 可读，不代表全部文件完整、Google Photos 可读或云端上传完成。
 
-单次扫描最多 500 个媒体、10000 个条目、深度 32；4 分钟软时限在遍历与每文件处理之间检查，单次扫描回调等待 15 秒。SMB/FUSE 阻塞系统调用可能超过软时限。尚无全库增量扫描、分页游标、持续目录监听或自动清理历史 MediaStore 记录。
+扫描开始时，按可执行文件、remote、挂载目录和设备标记匹配唯一的 rclone mount 进程，向该进程发送 SIGHUP 刷新目录缓存；不会影响 rclone Web UI。随后由新的 rclone SMB 客户端递归读取完整 JSON 清单，独立于 FUSE 缓存。清单前后验证源与目标挂载 ID、设备号及进程，失败退出、截断、超大输出或不支持的路径均使扫描失败。
+
+现存媒体先验证文件可读，再交给媒体扫描器。扫描完整且无读取失败后，仅查询当前 DCIM 挂载范围内的图片和视频索引，对 SQL LIKE 中的下划线等字符进行转义。候选路径需在两次内容一致的完整 SMB 清单中均缺失；挂载标识必须一致。还需在应用视角逐层验证文件缺失，拒绝符号链接与权限/I/O 错误。每次提交缺失路径前再次验证挂载和文件状态。
+
+清理使用 `MediaScannerConnection.scanFile` 重新扫描确认缺失的路径，随后查询对应 MediaStore ID 是否消失；不调用 ContentResolver.delete 或文件删除操作。扫描回调超时会停止后续清理；系统异步扫描可能稍后完成。此操作不调用 Google Photos 云端 API。
+
+单次扫描最多 500 个媒体、10000 个条目、深度 32；4 分钟软时限在遍历与每文件处理之间检查，单次扫描回调等待 15 秒。清单最多 10000 条、4 Mi 字符，单次清理最多 500 条；触及扫描边界、读取失败或目录内容变化时保留历史记录。SMB/FUSE 阻塞系统调用可能超过软时限。尚无全库增量扫描、分页游标或持续目录监听。远程状态和系统扫描之间无法形成跨服务原子事务，清理前的重复核对用于缩小竞态窗口。
 
 前台按钮操作在 ViewModel 的 IO 协程执行。开机恢复使用 WorkManager 持久任务，无开机直接启动前台服务。恢复只重新挂载，扫描需要手动触发。手动卸载取消待执行的开机恢复。应用被系统杀死后挂载可能仍然存在；重新启动应用后刷新/卸载。
 

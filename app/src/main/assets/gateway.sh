@@ -118,3 +118,62 @@ status_gateway() {
         else echo "UNMOUNTED $point"; fi
     done
 }
+
+# Only the daemon whose exact executable, remote and mountpoint match this
+# configuration may receive HUP. Do not signal the module's rclone Web UI.
+gateway_daemon() {
+    match=''
+    for pid in $(pidof rclone 2>/dev/null || true); do
+        case "$pid" in ''|*[!0-9]*) continue ;; esac
+        args=$(tr '\000' '\n' < "${PROC_ROOT:-/proc}/$pid/cmdline" 2>/dev/null) || continue
+        if printf '%s\n' "$args" | awk -v binary="$RCLONE" -v remote="$REMOTE" -v source="$SOURCE" '
+            NR==1 && $0==binary { ok++ }
+            NR==2 && $0=="mount" { ok++ }
+            NR==3 && $0==remote { ok++ }
+            NR==4 && $0==source { ok++ }
+            previous=="--devname" && $0=="nas-photos-gateway" { named=1 }
+            { previous=$0 }
+            END { exit !(ok==4 && named==1) }'; then
+            [ -z "$match" ] || fail '存在多个匹配的 rclone 进程，已停止扫描'
+            match="$pid"
+        fi
+    done
+    [ -n "$match" ] || fail '当前挂载与保存的 NAS 配置不匹配，请卸载后重新挂载'
+    printf '%s\n' "$match"
+}
+
+scan_identity() {
+    select_bindpoint
+    guard_all_mounts
+    guard_path "$SOURCE"
+    guard_path "$TARGET"
+    for point in "$SOURCE" "$TARGET" $RUNTIME_POINTS; do
+        owned "$point" && readonly_mount "$point" || fail '扫描需要完整的只读挂载'
+    done
+    source_device=$(awk -v p="$SOURCE" '$5==p {print $3}' "$MOUNTINFO")
+    target_device=$(awk -v p="$TARGET" '$5==p {print $3}' "$MOUNTINFO")
+    [ "$source_device" = "$target_device" ] || fail '源目录与应用目录的挂载不一致'
+    source_id=$(awk -v p="$SOURCE" '$5==p {print $1}' "$MOUNTINFO")
+    target_id=$(awk -v p="$TARGET" '$5==p {print $1}' "$MOUNTINFO")
+    daemon=$(gateway_daemon) || exit 20
+    printf '%s:%s:%s:%s\n' "$source_id" "$target_id" "$source_device" "$daemon"
+}
+
+snapshot_gateway() {
+    token=$(scan_identity) || exit 20
+    printf 'GATEWAY_SNAPSHOT %s\n' "$token"
+    # A new SMB client bypasses the mount's cached directory listing. Include
+    # directories and hidden files so presence can never be mistaken for deletion.
+    "$RCLONE" lsjson "$REMOTE" --recursive --no-modtime --no-mimetype \
+        --config /dev/null --contimeout 5s --timeout 15s --retries 1 --low-level-retries 1 || exit 21
+    after=$(scan_identity) || exit 20
+    [ "$token" = "$after" ] || fail '扫描期间挂载发生变化，已停止操作'
+    printf '\nGATEWAY_SNAPSHOT_END %s\n' "$token"
+}
+
+prepare_scan() {
+    token=$(scan_identity) || exit 20
+    daemon=$(gateway_daemon) || exit 20
+    kill -HUP "$daemon" || fail '刷新 rclone 目录缓存失败'
+    snapshot_gateway
+}
