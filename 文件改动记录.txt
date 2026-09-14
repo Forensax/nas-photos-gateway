@@ -1,0 +1,2 @@
+NAS-Photos-Gateway_v1
+创建 Android MVP：Compose 状态/设置、加密配置、只读 Root 挂载、媒体扫描、开机恢复、文档、测试及 GitHub Actions APK 构建。
