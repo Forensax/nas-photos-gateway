@@ -17,7 +17,7 @@ class ScanIndex(directory: File) : Closeable {
         db = SQLiteDatabase.openOrCreateDatabase(file, null)
         db.execSQL("PRAGMA temp_store=FILE")
         db.execSQL("CREATE TABLE listing(slot INTEGER, key TEXT, kind INTEGER, PRIMARY KEY(slot,key,kind))")
-        db.execSQL("CREATE TABLE work(id INTEGER PRIMARY KEY, path TEXT NOT NULL)")
+        db.execSQL("CREATE TABLE work(id INTEGER PRIMARY KEY, path TEXT NOT NULL, staged INTEGER DEFAULT 0)")
         db.execSQL("CREATE TABLE media(id INTEGER PRIMARY KEY, path TEXT, key TEXT, type INTEGER, candidate INTEGER DEFAULT 0)")
         db.execSQL("CREATE INDEX media_key ON media(key)")
     }
@@ -51,8 +51,13 @@ class ScanIndex(directory: File) : Closeable {
         }
     }
     fun enqueue(path: String) { db.execSQL("INSERT INTO work(path) VALUES(?)", arrayOf(path)) }
+    fun stage(path: String) { db.execSQL("INSERT INTO work(path,staged) VALUES(?,1)", arrayOf(path)) }
+    fun finishDirectory(include: Boolean) {
+        if (include) db.execSQL("UPDATE work SET staged=0 WHERE staged=1")
+        else db.delete("work", "staged=1", null)
+    }
     fun nextWork(): String? {
-        val row = db.rawQuery("SELECT id,path FROM work ORDER BY id LIMIT 1", null).use {
+        val row = db.rawQuery("SELECT id,path FROM work WHERE staged=0 ORDER BY id LIMIT 1", null).use {
             if (it.moveToFirst()) it.getLong(0) to it.getString(1) else null
         } ?: return null
         db.delete("work", "id=?", arrayOf(row.first.toString()))

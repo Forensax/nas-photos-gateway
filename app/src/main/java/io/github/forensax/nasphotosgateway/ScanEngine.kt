@@ -29,6 +29,15 @@ open class ScanFiles {
         for (part in root.relativize(path)) {
             current = current.resolve(part)
             val attrs = try { attributes(current) } catch (_: NoSuchFileException) { return true }
+            catch (error: IOException) {
+                // Some Android SMB/FUSE versions report EIO for absent paths.
+                // Only a successful parent enumeration can establish absence;
+                // unreadable parents or a present name preserve the error.
+                var present = false
+                children(current.parent) { if (it.fileName == current.fileName) present = true }
+                if (!present) return true
+                throw error
+            }
             check(!attrs.isSymbolicLink) { "路径包含符号链接" }
         }
         return false
@@ -52,6 +61,7 @@ class ScanEngine(private val index: ScanIndex, private val media: ScanMedia, pri
         val stats = ScanStats()
         val extensions = setOf("jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "avif", "dng", "mp4", "mov", "m4v", "3gp", "mkv")
         var partial = !initial.complete
+        var readIssue = ""
         var note = if (partial) "NAS 清单不完整，已跳过失效索引清理。" else ""
         val task = coroutineContext
         try {
@@ -74,14 +84,19 @@ class ScanEngine(private val index: ScanIndex, private val media: ScanMedia, pri
                     if (path != root && path.fileName.toString().startsWith('.')) { stats.skipped++; continue }
                     if (attrs.isDirectory) {
                         verifyMount(initial.mountIdentity)
-                        val hidden = try { files.attributes(path.resolve(".nomedia")); true } catch (_: NoSuchFileException) { false }
-                        if (hidden) { stats.skipped++; continue }
-                        index.batch { tick -> files.children(path) { child ->
-                            task.ensureActive()
-                            val relative = root.relativize(child).toString().replace(java.io.File.separatorChar, '/')
-                            if (MediaIndexPolicy.validRelativePath(relative)) { index.enqueue(child.toString()); tick() }
-                            else { stats.failed++; partial = true }
-                        } }
+                        var hidden = false
+                        var listed = false
+                        try {
+                            index.batch { tick -> files.children(path) { child ->
+                                task.ensureActive()
+                                if (child.fileName.toString() == ".nomedia") hidden = true
+                                val relative = root.relativize(child).toString().replace(java.io.File.separatorChar, '/')
+                                if (MediaIndexPolicy.validRelativePath(relative)) { index.stage(child.toString()); tick() }
+                                else { stats.failed++; partial = true }
+                            } }
+                            listed = true
+                        } finally { index.finishDirectory(listed && !hidden) }
+                        if (hidden) stats.skipped++
                     } else if (attrs.isRegularFile && path.fileName.toString().substringAfterLast('.', "").lowercase() in extensions) {
                         val relative = root.relativize(path).toString().replace(java.io.File.separatorChar, '/')
                         if (initial.complete && !index.contains(initial.slot, relative)) { stats.skipped++; partial = true; continue }
@@ -94,14 +109,15 @@ class ScanEngine(private val index: ScanIndex, private val media: ScanMedia, pri
                         if (!result.completed || !result.indexed || !result.readable) { stats.failed++; partial = true }
                     }
                 } catch (cancelled: CancellationException) { throw cancelled }
-                catch (_: IOException) { stats.failed++; partial = true }
-                catch (_: SecurityException) { stats.failed++; partial = true }
+                catch (error: IOException) { stats.failed++; partial = true; readIssue = error.message.orEmpty().take(200) }
+                catch (error: SecurityException) { stats.failed++; partial = true; readIssue = error.message.orEmpty().take(200) }
                 progress(stats.display())
             }
             task.ensureActive()
             verifyMount(initial.mountIdentity)
             if (partial || stats.failed > 0) {
-                note = "扫描或清单不完整，已跳过失效索引清理。"
+                note = "NAS 清单 ${index.count(initial.slot)} 条；扫描或清单不完整，已跳过失效索引清理。" +
+                    if (readIssue.isNotEmpty()) "\n读取失败：$readIssue" else ""
             } else {
                 index.batch { tick -> media.entries { entry -> task.ensureActive(); index.addMedia(root.toString(), entry); tick() } }
                 if (index.missing(initial.slot).isNotEmpty()) {

@@ -31,10 +31,11 @@ class MediaIndexPolicyTest {
         val badDirectories = mutableSetOf<Path>()
         val badAttributes = mutableSetOf<Path>()
         val links = mutableSetOf<Path>()
+        var genericMissing = false
         fun add(relative: String, dir: Boolean = false) { nodes[root.resolve(relative)] = dir }
         override fun attributes(path: Path): BasicFileAttributes {
             if (path in badAttributes) throw IOException("cannot stat path")
-            val directory = nodes[path] ?: throw NoSuchFileException(path.toString())
+            val directory = nodes[path] ?: if (genericMissing) throw IOException("EIO") else throw NoSuchFileException(path.toString())
             return object : BasicFileAttributes {
                 override fun isDirectory() = directory
                 override fun isRegularFile() = !directory
@@ -212,7 +213,7 @@ class MediaIndexPolicyTest {
     }
     @Test fun allCleanupPathsAreCheckedBeforeFirstDeletion() = runBlocking {
         store().use { index ->
-            val fs = FakeFiles(root); fs.badAttributes.add(root.resolve("bad"))
+            val fs = FakeFiles(root); fs.add("bad", true); fs.badAttributes.add(root.resolve("bad"))
             val media = FakeMedia(fs)
             media.records += MediaIndexEntry(1, "$root/a.jpg")
             media.records += MediaIndexEntry(2, "$root/bad/z.jpg")
@@ -230,6 +231,24 @@ class MediaIndexPolicyTest {
             try { ScanEngine(index, media, fs).scan(root, snapshot(), { snapshot(1) }, {}, {}); fail() }
             catch (_: IOException) { }
             assertEquals(1, media.scanned.size); assertEquals(2, media.records.size)
+        }
+    }
+    @Test fun missingPathsReportedAsEioRequireSuccessfulParentListing() = runBlocking {
+        store().use { index ->
+            val fs = FakeFiles(root); fs.genericMissing = true
+            val media = FakeMedia(fs); media.records += MediaIndexEntry(1, "$root/deleted.jpg")
+            val result = ScanEngine(index, media, fs).scan(root, snapshot(), { snapshot(1) }, {}, {})
+            assertTrue(result, result.contains("已清理 1"))
+        }
+    }
+    @Test fun noMediaPrunesEveryStagedChildEvenWhenMarkerIsLast() = runBlocking {
+        store().use { index ->
+            val fs = FakeFiles(root); fs.genericMissing = true
+            repeat(300) { fs.add("$it.jpg"); index.addPath(0, "$it.jpg", false) }
+            fs.add(".nomedia"); index.addPath(0, ".nomedia", false)
+            val media = FakeMedia(fs)
+            ScanEngine(index, media, fs).scan(root, snapshot(), { snapshot(1) }, {}, {})
+            assertTrue(media.scanned.isEmpty())
         }
     }
 }
