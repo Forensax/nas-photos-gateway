@@ -34,12 +34,13 @@ class RootStreamTest {
                 }
             }
             withTimeout(5000) { while (!ready.get()) delay(10) }
-            val child = Files.readString(pidFile).trim().toLong()
+            val child = pidFile.toFile().readText().trim().toLong()
             withTimeout(7000) { task.cancelAndJoin() }
             assertTrue(survivor.isAlive)
             val stat = java.io.File("/proc/$child/stat")
             // A just-killed orphan may briefly remain as a zombie until reaped.
-            assertTrue(!stat.exists() || stat.readText().substringAfterLast(") ").startsWith("Z"))
+            val state = runCatching { stat.readText().substringAfterLast(") ") }.getOrDefault("")
+            assertTrue(state.isEmpty() || state.startsWith("Z"))
         } finally {
             survivor.destroyForcibly()
             Files.deleteIfExists(pidFile); Files.deleteIfExists(directory)
