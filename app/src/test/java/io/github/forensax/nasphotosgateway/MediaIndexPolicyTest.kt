@@ -221,7 +221,7 @@ class MediaIndexPolicyTest {
             val result = ScanEngine(index, media, fs).scan(root, snapshot(), { error("must not reconcile") }, {}, {})
             assertTrue(result.startsWith("部分完成")); assertTrue(media.scanned.isEmpty()); assertEquals(2, media.records.size)
         }
-    }    @Test fun cleanupFailureStopsSubsequentSubmissions() = runBlocking {
+    }`r`n    @Test fun cleanupFailureStopsSubsequentSubmissions() = runBlocking {
         store().use { index ->
             val fs = FakeFiles(root); val media = FakeMedia(fs)
             media.records += MediaIndexEntry(1, "$root/a.jpg")
