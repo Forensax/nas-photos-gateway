@@ -85,6 +85,7 @@ class MediaIndexPolicyTest {
             assertFalse(text, RemoteSnapshot.read(text.reader(), 0, index).complete)
         }
         assertThrows(IllegalArgumentException::class.java) { RemoteSnapshot.read("[]".reader(), 0, index) }
+        Unit
     }
     @Test fun unicodeHiddenAndPrefixCollisionsRetainRecords() = store().use { index ->
         index.addPath(0, "CAFÉ.JPG", false)
