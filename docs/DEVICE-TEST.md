@@ -34,3 +34,15 @@
 | 系统杀死应用、旋转屏幕 | 状态可重新获取，配置可解密 |
 
 若 URI 能读取而 Google Photos 看不到，优先记录命名空间与 MediaProvider 可见性，不将问题直接归因于 NAS。MVP 不自动注入其他应用的 mount namespace。
+
+## 2026-09-18 v0.1.3 验证记录
+
+- 分支：`feature/scan-delete-v0.1.3`，最终提交：`2bc6822`。
+- GitHub Actions：25 个 JVM/Robolectric 测试，失败 0，忽略 0；Root 脚本测试、Lint、APK 构建和固定签名校验通过。
+- APK：`versionName 0.1.3`、`versionCode 4`，SHA-256：`AB39FE7D3D30872B4680F64A0A44616519FD205DE0477C4375B7A6FFA200F3F1`。
+- Pixel `FA69K0304783` 已覆盖安装，显示 `0.1.3 / versionCode 4`；0.1.2 配置仍保留。
+- 设置页已显示“允许删除 NAS 文件”，默认关闭；状态页显示媒体缓存不使用磁盘缓存。
+- 在 `M:\Photo2\Gateway_Test_20260918_v6` 创建 501 张隔离测试图片并生成 SHA-256 清单：文件数 501，总大小约 1.47 MB。
+- 实机已验证重新打开 App、卸载、修改子目录和挂载目录、保存、重新挂载、重新扫描流程。
+- 当前 Pixel 的 rclone/FUSE 挂载对该 SMB 目录返回目录为空和文件读取 `I/O error`，因此本轮未将 501 张扫描、NAS 删除和 Google Photos“释放空间”标记为通过；NAS 文件及测试目录保留，未执行批量删除。
+- Google Photos 云端备份与“释放空间”需在 FUSE 读取恢复后单独验证；普通删除不能替代该项验收。
