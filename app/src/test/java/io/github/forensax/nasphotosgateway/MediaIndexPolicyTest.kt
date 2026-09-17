@@ -206,23 +206,22 @@ class MediaIndexPolicyTest {
             val fs = FakeFiles(root); fs.add("link.jpg"); fs.links.add(root.resolve("link.jpg"))
             index.addPath(0, "link.jpg", false)
             val media = FakeMedia(fs)
-            try { ScanEngine(index, media, fs).scan(root, snapshot(), { snapshot(1) }, {}, {}); fail() }
+            try { ScanEngine(index, media, fs).scan(root, snapshot(), { error("must not reconcile") }, {}, {}); fail() }
             catch (_: IllegalStateException) { }
             assertTrue(media.scanned.isEmpty())
         }
     }
     @Test fun allCleanupPathsAreCheckedBeforeFirstDeletion() = runBlocking {
         store().use { index ->
-            val fs = FakeFiles(root); fs.add("a.jpg"); fs.add("bad", true); fs.badAttributes.add(root.resolve("bad"))`n            index.addPath(0, "a.jpg", false); index.addPath(0, "bad", true)
+            val fs = FakeFiles(root); fs.add("a.jpg"); fs.add("bad", true); fs.badAttributes.add(root.resolve("bad"))
+            index.addPath(0, "a.jpg", false); index.addPath(0, "bad", true)
             val media = FakeMedia(fs)
             media.records += MediaIndexEntry(1, "$root/a.jpg")
             media.records += MediaIndexEntry(2, "$root/bad/z.jpg")
-            try { ScanEngine(index, media, fs).scan(root, snapshot(), { snapshot(1) }, {}, {}); fail() }
-            catch (_: IOException) { }
-            assertTrue(media.scanned.isEmpty()); assertEquals(2, media.records.size)
+            val result = ScanEngine(index, media, fs).scan(root, snapshot(), { error("must not reconcile") }, {}, {})
+            assertTrue(result.startsWith("部分完成")); assertTrue(media.scanned.isEmpty()); assertEquals(2, media.records.size)
         }
-    }
-    @Test fun cleanupFailureStopsSubsequentSubmissions() = runBlocking {
+    }    @Test fun cleanupFailureStopsSubsequentSubmissions() = runBlocking {
         store().use { index ->
             val fs = FakeFiles(root); val media = FakeMedia(fs)
             media.records += MediaIndexEntry(1, "$root/a.jpg")
