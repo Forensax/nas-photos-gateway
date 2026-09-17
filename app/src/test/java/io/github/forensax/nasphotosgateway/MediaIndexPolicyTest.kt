@@ -219,7 +219,7 @@ class MediaIndexPolicyTest {
             media.records += MediaIndexEntry(1, "$root/a.jpg")
             media.records += MediaIndexEntry(2, "$root/bad/z.jpg")
             val result = ScanEngine(index, media, fs).scan(root, snapshot(), { error("must not reconcile") }, {}, {})
-            assertTrue(media.scanned.isEmpty()); assertEquals(2, media.records.size)
+            assertEquals(listOf("$root/a.jpg"), media.scanned); assertEquals(2, media.records.size)
         }
     }
     @Test fun cleanupFailureStopsSubsequentSubmissions() = runBlocking {
