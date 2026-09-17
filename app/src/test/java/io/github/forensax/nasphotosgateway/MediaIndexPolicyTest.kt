@@ -213,7 +213,7 @@ class MediaIndexPolicyTest {
     }
     @Test fun allCleanupPathsAreCheckedBeforeFirstDeletion() = runBlocking {
         store().use { index ->
-            val fs = FakeFiles(root); fs.add("bad", true); fs.badAttributes.add(root.resolve("bad"))
+            val fs = FakeFiles(root); fs.add("a.jpg"); fs.add("bad", true); fs.badAttributes.add(root.resolve("bad"))`n            index.addPath(0, "a.jpg", false); index.addPath(0, "bad", true)
             val media = FakeMedia(fs)
             media.records += MediaIndexEntry(1, "$root/a.jpg")
             media.records += MediaIndexEntry(2, "$root/bad/z.jpg")
