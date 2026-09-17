@@ -12,7 +12,7 @@ base_table() {
     printf '1 0 0:28 / /mnt/runtime/default/emulated rw shared:13 - sdcardfs /data/media rw\n' > "$MOUNTINFO"
     row "$SOURCE"
 }
-row() { printf '2 1 0:29 / %s ro shared:14 - fuse.rclone nas-photos-gateway ro\n' "$1" >> "$MOUNTINFO"; }
+row() { printf '2 1 0:29 / %s %s shared:14 - fuse.rclone nas-photos-gateway %s\n' "$1" "${TEST_MODE:-ro}" "${TEST_MODE:-ro}" >> "$MOUNTINFO"; }
 remove_row() { awk -v p="$1" '$5!=p' "$MOUNTINFO" > "$TMP/new"; cat "$TMP/new" > "$MOUNTINFO"; }
 prepare_empty() { echo "prepare $1" >> "$TMP/operations"; }
 mount() {
@@ -56,6 +56,16 @@ owned "$TARGET"
 owned "$SOURCE"
 if mounted "$BINDPOINT"; then exit 1; fi
 SIMULATE_FAILURE=false
+# Writable peers propagate, and a saved-mode mismatch never blocks unmount.
+TEST_MODE=rw
+ALLOW_DELETE=true
+base_table
+bind_gateway
+for point in "$SOURCE" "$TARGET" $RUNTIME_POINTS; do owned "$point" && writable_mount "$point"; done
+ALLOW_DELETE=false
+if (bind_gateway); then echo 'FAIL: mismatched mode accepted'; exit 1; fi
+unmount_gateway
+for point in "$SOURCE" "$TARGET" $RUNTIME_POINTS; do if mounted "$point"; then exit 1; fi; done
 # Devices without sdcardfs retain the direct bind strategy.
 printf '' > "$MOUNTINFO"
 select_bindpoint

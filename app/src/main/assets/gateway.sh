@@ -1,6 +1,8 @@
 # Sourced after validated, shell-quoted variables; never enable shell tracing.
 MOUNTINFO=${MOUNTINFO:-/proc/self/mountinfo}
-fail() { echo "$1"; exit 20; }
+ALLOW_DELETE=${ALLOW_DELETE:-false}
+case "$ALLOW_DELETE" in true|false) ;; *) echo '挂载模式无效' >&2; exit 20 ;; esac
+fail() { echo "$1" >&2; exit 20; }
 mounted() { awk -v p="$1" '$5 == p { found=1 } END { exit !found }' "$MOUNTINFO"; }
 owned() {
     awk -v p="$1" '
@@ -12,6 +14,12 @@ owned() {
 }
 readonly_mount() {
     awk -v p="$1" '$5 == p && ("," $6 ",") ~ /,ro,/ { found=1 } END { exit !found }' "$MOUNTINFO"
+}
+writable_mount() {
+    awk -v p="$1" '$5 == p && ("," $6 ",") ~ /,rw,/ { found=1 } END { exit !found }' "$MOUNTINFO"
+}
+expected_mode() {
+    if [ "$ALLOW_DELETE" = true ]; then writable_mount "$1"; else readonly_mount "$1"; fi
 }
 guard_mount() {
     if mounted "$1"; then owned "$1" || fail '目录已有其他挂载，已停止操作'; fi
@@ -48,7 +56,7 @@ guard_all_mounts() {
 bind_gateway() {
     select_bindpoint
     guard_all_mounts
-    owned "$SOURCE" && readonly_mount "$SOURCE" || fail 'FUSE 挂载未通过只读检查'
+    owned "$SOURCE" && expected_mode "$SOURCE" || fail 'FUSE 挂载模式与设置不一致，请卸载后重新挂载'
     if ! mounted "$BINDPOINT"; then
         prepare_empty "$BINDPOINT"
         migrated=false
@@ -60,12 +68,15 @@ bind_gateway() {
             if [ "$migrated" = true ]; then mount --bind "$SOURCE" "$TARGET" || fail '映射恢复失败，请检查诊断'; fi
             fail 'bind mount 失败；FUSE 已保留，可使用卸载清理'
         fi
-        if ! readonly_mount "$BINDPOINT"; then
-            mount -o remount,bind,ro "$BINDPOINT" || fail '只读 bind 设置失败，请卸载后检查系统兼容性'
+        if ! expected_mode "$BINDPOINT"; then
+            bind_mode=ro
+            [ "$ALLOW_DELETE" != true ] || bind_mode=rw
+            mount -o "remount,bind,$bind_mode" "$BINDPOINT" || fail 'bind 模式设置失败，请卸载后检查系统兼容性'
         fi
     fi
-    owned "$BINDPOINT" && readonly_mount "$BINDPOINT" || fail '共享 bind 挂载未通过只读检查'
-    owned "$TARGET" && readonly_mount "$TARGET" || fail '目录映射未传播到应用路径，请检查诊断'
+    for point in "$BINDPOINT" "$TARGET" $RUNTIME_POINTS; do
+        owned "$point" && expected_mode "$point" || fail '目录映射模式不一致或未传播到应用路径，请检查诊断'
+    done
 }
 test_connection() {
     "$RCLONE" lsf "$REMOTE" --max-depth 1 --config /dev/null \
@@ -81,9 +92,14 @@ mount_gateway() {
     guard_all_mounts
     if ! mounted "$SOURCE"; then
         prepare_empty "$SOURCE"
+        set -- --read-only --dir-perms 0555 --file-perms 0444
+        if [ "$ALLOW_DELETE" = true ]; then
+            # Deletion needs a writable parent. This is not delete-only isolation.
+            set -- --dir-perms 0777 --file-perms 0444 --default-permissions
+        fi
         "$RCLONE" mount "$REMOTE" "$SOURCE" --config /dev/null \
-            --devname nas-photos-gateway --read-only --allow-other \
-            --uid 1023 --gid 1023 --dir-perms 0555 --file-perms 0444 \
+            --devname nas-photos-gateway --allow-other "$@" \
+            --uid 1023 --gid 1023 --umask 000 \
             --vfs-cache-mode off --buffer-size 4M --dir-cache-time 5m \
             --contimeout 5s --timeout 15s --retries 1 --low-level-retries 1 \
             --daemon --daemon-wait 20s --log-level ERROR
@@ -113,7 +129,8 @@ status_gateway() {
     if [ -c /dev/fuse ]; then echo 'FUSE_DEVICE_OK'; else echo 'FUSE_DEVICE_MISSING'; fi
     for point in "$SOURCE" "$TARGET" $RUNTIME_POINTS; do
         if owned "$point"; then
-            if readonly_mount "$point"; then echo "READONLY $point"; else echo "NOT_READONLY $point"; fi
+            if readonly_mount "$point"; then echo "READONLY $point"; elif writable_mount "$point"; then echo "READWRITE $point"; else echo "UNKNOWN_MODE $point"; fi
+            expected_mode "$point" || echo "MODE_MISMATCH $point"
         elif mounted "$point"; then echo "FOREIGN_MOUNT $point"
         else echo "UNMOUNTED $point"; fi
     done
@@ -148,7 +165,7 @@ scan_identity() {
     guard_path "$SOURCE"
     guard_path "$TARGET"
     for point in "$SOURCE" "$TARGET" $RUNTIME_POINTS; do
-        owned "$point" && readonly_mount "$point" || fail '扫描需要完整的只读挂载'
+        owned "$point" && expected_mode "$point" || fail '扫描需要完整且与设置一致的挂载'
     done
     source_device=$(awk -v p="$SOURCE" '$5==p {print $3}' "$MOUNTINFO")
     target_device=$(awk -v p="$TARGET" '$5==p {print $3}' "$MOUNTINFO")
@@ -156,19 +173,21 @@ scan_identity() {
     source_id=$(awk -v p="$SOURCE" '$5==p {print $1}' "$MOUNTINFO")
     target_id=$(awk -v p="$TARGET" '$5==p {print $1}' "$MOUNTINFO")
     daemon=$(gateway_daemon) || exit 20
-    printf '%s:%s:%s:%s\n' "$source_id" "$target_id" "$source_device" "$daemon"
+    mode=ro
+    [ "$ALLOW_DELETE" != true ] || mode=rw
+    printf '%s:%s:%s:%s:%s\n' "$source_id" "$target_id" "$source_device" "$daemon" "$mode"
 }
 
 snapshot_gateway() {
     token=$(scan_identity) || exit 20
-    printf 'GATEWAY_SNAPSHOT %s\n' "$token"
+    printf '{"identity":"%s","entries":' "$token"
     # A new SMB client bypasses the mount's cached directory listing. Include
     # directories and hidden files so presence can never be mistaken for deletion.
     "$RCLONE" lsjson "$REMOTE" --recursive --no-modtime --no-mimetype \
         --config /dev/null --contimeout 5s --timeout 15s --retries 1 --low-level-retries 1 || exit 21
     after=$(scan_identity) || exit 20
     [ "$token" = "$after" ] || fail '扫描期间挂载发生变化，已停止操作'
-    printf '\nGATEWAY_SNAPSHOT_END %s\n' "$token"
+    printf ',"end":"%s"}\n' "$token"
 }
 
 prepare_scan() {

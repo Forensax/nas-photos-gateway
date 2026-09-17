@@ -33,4 +33,12 @@ class GatewayConfigTest {
             good.copy(rclonePath = it).validate()
         }
     }
+    @Test fun oldConfigurationsStayReadOnlyAndDeleteModeIsExplicit() {
+        val json = org.json.JSONObject("""{"host":"192.168.1.10","share":"photo","username":"pixel","password":"secret","subdirectory":"","mountDirectory":"/storage/emulated/0/DCIM/NAS","rclonePath":"/vendor/bin/rclone"}""")
+        assertFalse(ConfigStore.decode(json).allowDelete)
+        json.put("allowDelete", true)
+        assertTrue(ConfigStore.decode(json).allowDelete)
+        assertTrue(RootScripts.environment(good, false).contains("ALLOW_DELETE='false'"))
+        assertTrue(RootScripts.environment(good.copy(allowDelete = true), false).contains("ALLOW_DELETE='true'"))
+    }
 }

@@ -30,9 +30,7 @@ class ConfigStore(context: Context) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
         val json = JSONObject(String(cipher.doFinal(bytes.copyOfRange(12, bytes.size)), Charsets.UTF_8))
-        return GatewayConfig(json.getString("host"), json.getString("share"), json.getString("username"),
-            json.getString("password"), json.getString("subdirectory"), json.getString("mountDirectory"),
-            json.getString("rclonePath"), json.optBoolean("restoreAtBoot"))
+        return decode(json)
     }
     @Synchronized fun save(config: GatewayConfig) {
         config.validate()
@@ -41,6 +39,7 @@ class ConfigStore(context: Context) {
             put("password", config.password); put("subdirectory", config.subdirectory)
             put("mountDirectory", config.mountDirectory); put("rclonePath", config.rclonePath)
             put("restoreAtBoot", config.restoreAtBoot)
+            put("allowDelete", config.allowDelete)
         }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key())
@@ -48,5 +47,10 @@ class ConfigStore(context: Context) {
         val stream = file.startWrite()
         try { stream.write(bytes); file.finishWrite(stream) }
         catch (error: Exception) { file.failWrite(stream); throw error }
+    }
+    companion object {
+        internal fun decode(json: JSONObject) = GatewayConfig(json.getString("host"), json.getString("share"), json.getString("username"),
+            json.getString("password"), json.getString("subdirectory"), json.getString("mountDirectory"),
+            json.getString("rclonePath"), json.optBoolean("restoreAtBoot"), json.optBoolean("allowDelete", false))
     }
 }

@@ -7,6 +7,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
+import java.io.File
+import kotlin.coroutines.coroutineContext
 
 data class GatewayState(
     val busy: Boolean = false,
@@ -60,7 +63,7 @@ class GatewayRepository(private val context: Context) {
                 lockConfig(true)
                 root(config, "mount_gateway", true)
                 updateDiagnostics(config)
-                report("只读挂载已建立；请扫描并验证 Google Photos")
+                report(if (config.allowDelete) "允许删除的挂载已建立" else "只读挂载已建立")
             }
             "unmount" -> {
                 mutable.value = mutable.value.copy(mountStatus = "正在卸载")
@@ -76,19 +79,20 @@ class GatewayRepository(private val context: Context) {
                 check(scanner.hasPermission()) { "请先在设置页授予文件访问权限" }
                 mutable.value = mutable.value.copy(scan = "正在核对 NAS 实时清单")
                 val result = try {
-                    val initial = RemoteSnapshot.parse(root(config, "prepare_scan", true, RemoteSnapshot.MAX_OUTPUT))
-                    mutable.value = mutable.value.copy(connectionStatus = "目录读取成功", scan = "正在扫描")
-                    scanner.scan(
-                        config.mountDirectory,
-                        initial,
-                        confirmSnapshot = { RemoteSnapshot.parse(root(config, "snapshot_gateway", true, RemoteSnapshot.MAX_OUTPUT)) },
-                        verifyMount = { expected ->
-                            check(root(config, "scan_identity", false).trim() == expected) { "挂载发生变化，已停止清理" }
-                        },
-                        progress = { progress -> mutable.value = mutable.value.copy(scan = progress) },
-                    )
+                    ScanIndex(File(context.cacheDir, "scan-index")).use { index ->
+                        val initial = snapshot(config, "prepare_scan", 0, index)
+                        mutable.value = mutable.value.copy(connectionStatus = if (initial.complete) "目录读取成功" else "清单不完整", scan = "正在扫描")
+                        scanner.scan(
+                            config.mountDirectory, index, initial,
+                            confirmSnapshot = { snapshot(config, "snapshot_gateway", 1, index) },
+                            verifyMount = { expected ->
+                                check(root(config, "scan_identity", false).trim() == expected) { "挂载发生变化，扫描已停止" }
+                            },
+                            progress = { progress -> mutable.value = mutable.value.copy(scan = progress) },
+                        )
+                    }
                 } catch (error: Exception) {
-                    mutable.value = mutable.value.copy(scan = "扫描中断\n${mutable.value.scan}")
+                    if (!mutable.value.scan.startsWith("已中断")) mutable.value = mutable.value.copy(scan = "已中断\n${mutable.value.scan}")
                     throw error
                 }
                 mutable.value = mutable.value.copy(scan = result)
@@ -96,6 +100,17 @@ class GatewayRepository(private val context: Context) {
             }
             else -> error("未知操作")
         }
+    }
+    private suspend fun snapshot(config: GatewayConfig, function: String, slot: Int, index: ScanIndex): RemoteSnapshot {
+        val body = context.assets.open("gateway.sh").bufferedReader().use { it.readText() }
+        val task = coroutineContext
+        val result = shell.stream(RootScripts.environment(config, true) + "\n" + body + "\n" + function, config.password) {
+            RemoteSnapshot.read(it, slot, index) { task.ensureActive() }
+        }
+        task.ensureActive()
+        check(root(config, "scan_identity", false).trim() == result.value.mountIdentity) { "挂载发生变化，扫描已停止" }
+        if (result.code != 0 && result.error.isNotBlank()) report("NAS 清单未完成：${result.error}")
+        return result.value.copy(complete = result.value.complete && result.code == 0)
     }
     private suspend fun root(config: GatewayConfig, function: String, credentials: Boolean, outputLimit: Int = 16384): String {
         val body = context.assets.open("gateway.sh").bufferedReader().use { it.readText() }
@@ -109,9 +124,10 @@ class GatewayRepository(private val context: Context) {
         val visible = GatewayScanner(context).visibility(config.mountDirectory)
         val lines = rootStatus.lines()
         val mount = when {
-            "READONLY ${config.mountDirectory}" in lines && "READONLY ${RootScripts.SOURCE}" in lines -> "FUSE + bind 只读"
             lines.any { it.startsWith("FOREIGN_MOUNT") } -> "目录存在其他挂载"
-            lines.any { it.startsWith("NOT_READONLY") } -> "只读检查失败"
+            lines.any { it.startsWith("MODE_MISMATCH") } -> "挂载模式与设置不一致"
+            "READONLY ${config.mountDirectory}" in lines && "READONLY ${RootScripts.SOURCE}" in lines -> "FUSE + bind 只读"
+            "READWRITE ${config.mountDirectory}" in lines && "READWRITE ${RootScripts.SOURCE}" in lines -> "FUSE + bind 允许删除"
             "UNMOUNTED ${config.mountDirectory}" in lines && "UNMOUNTED ${RootScripts.SOURCE}" in lines -> "未挂载"
             else -> "部分挂载，请检查"
         }

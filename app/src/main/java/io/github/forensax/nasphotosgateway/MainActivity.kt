@@ -50,7 +50,7 @@ private fun GatewayScreen(model: GatewayViewModel = viewModel()) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.safeDrawingPadding().padding(horizontal = 20.dp)) {
             Text("NAS Photos Gateway", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
-            Text("Pixel · 只读照片网关", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp))
+            Text("Pixel · NAS 照片网关", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp))
             TabRow(selectedTabIndex = tab) {
                 listOf("状态", "设置").forEachIndexed { index, label ->
                     Tab(selected = tab == index, onClick = { tab = index }, text = { Text(label) })
@@ -73,7 +73,7 @@ private fun StatusPage(state: GatewayState, model: GatewayViewModel) {
     HorizontalDivider()
     StatusLine("SMB", state.connectionStatus)
     StatusLine("挂载", state.mountStatus)
-    StatusLine("挂载保护", "只读 · 零磁盘 VFS 缓存")
+    StatusLine("媒体缓存", "不使用磁盘缓存")
     StatusLine("配置", if (state.configLocked) "挂载期间锁定" else "可编辑")
     StatusLine("Google Photos", "待实机验证")
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -125,7 +125,11 @@ private fun SettingsPage(state: GatewayState, model: GatewayViewModel) {
         Text("开机解锁后恢复")
         Switch(checked = config.restoreAtBoot, enabled = editable, onCheckedChange = { config = config.copy(restoreAtBoot = it) })
     }
-    Text("只读模式固定开启", style = MaterialTheme.typography.bodySmall)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        Text("允许删除 NAS 文件")
+        Switch(checked = config.allowDelete, enabled = editable, onCheckedChange = { config = config.copy(allowDelete = it) })
+    }
+    if (config.allowDelete) Text("开启后，相册释放空间会删除 NAS 源文件。", style = MaterialTheme.typography.bodySmall)
     if (state.configLocked) Text("卸载后可修改设置", color = MaterialTheme.colorScheme.primary)
     if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
     Text(state.message, style = MaterialTheme.typography.bodySmall)

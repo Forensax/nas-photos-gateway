@@ -9,6 +9,7 @@ data class GatewayConfig(
     val mountDirectory: String = "/storage/emulated/0/DCIM/NAS",
     val rclonePath: String = "/vendor/bin/rclone",
     val restoreAtBoot: Boolean = false,
+    val allowDelete: Boolean = false,
 ) {
     fun validate() {
         require(Regex("[a-zA-Z0-9.:-]+").matches(host)) { "请输入 NAS IP 或主机名，不含协议和端口" }

@@ -1,87 +1,200 @@
 package io.github.forensax.nasphotosgateway
 
+import kotlinx.coroutines.*
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowSystemClock
+import java.io.File
+import java.io.IOException
+import java.nio.file.NoSuchFileException
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.FileTime
+import java.time.Duration
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [28])
 class MediaIndexPolicyTest {
-    private val root = "/storage/emulated/0/DCIM/NAS_test"
-    private fun snapshot(vararg paths: String) = RemoteSnapshot("10:11:0:29:101", paths.map(MediaIndexPolicy::key).toSet())
-    private fun listing(json: String, end: String = "10:11:0:29:101") =
-        "GATEWAY_SNAPSHOT 10:11:0:29:101\n$json\nGATEWAY_SNAPSHOT_END $end"
-    private fun rejects(block: () -> Unit) {
-        try { block(); fail("Unsafe inventory was accepted") } catch (_: IllegalArgumentException) { }
-        catch (_: org.json.JSONException) { }
-    }
-
-    @Test fun emptyHealthyNasCanCleanDeletedRows() {
-        val empty = RemoteSnapshot.parse(listing("[]"))
-        val row = MediaIndexEntry(44, "$root/deleted.png")
-        assertEquals(listOf(row), MediaIndexPolicy.confirmedMissing(root, listOf(row), empty, empty))
-    }
-
-    @Test fun existingFilesHiddenEntriesAndUnicodeVariantsAreRetained() {
-        val existing = snapshot("子目录/照片.png", "CAFÉ.JPG", ".hidden.jpg", ".nomedia")
-        val rows = listOf("子目录/照片.png", "cafe\u0301.jpg", ".hidden.jpg").mapIndexed { index, path ->
-            MediaIndexEntry(index.toLong(), "$root/$path")
+    private val root = Paths.get("/storage/emulated/0/DCIM/NAS_test")
+    private val identity = "10:11:0:29:101:ro"
+    private fun store() = ScanIndex(File(RuntimeEnvironment.getApplication().cacheDir, "scan-tests"))
+    private fun listing(entries: String, end: String = identity) = """{"identity":"$identity","entries":$entries,"end":"$end"}"""
+    private fun snapshot(slot: Int = 0, complete: Boolean = true) = RemoteSnapshot(identity, slot, complete)
+    private class FakeFiles(val root: Path) : ScanFiles() {
+        val nodes = linkedMapOf(root to true)
+        val badReads = mutableSetOf<Path>()
+        val badDirectories = mutableSetOf<Path>()
+        val links = mutableSetOf<Path>()
+        fun add(relative: String, dir: Boolean = false) { nodes[root.resolve(relative)] = dir }
+        override fun attributes(path: Path): BasicFileAttributes {
+            val directory = nodes[path] ?: throw NoSuchFileException(path.toString())
+            return object : BasicFileAttributes {
+                override fun isDirectory() = directory
+                override fun isRegularFile() = !directory
+                override fun isSymbolicLink() = path in links
+                override fun isOther() = false
+                override fun size() = 1L
+                override fun fileKey(): Any = path
+                override fun creationTime() = FileTime.fromMillis(0)
+                override fun lastAccessTime() = creationTime()
+                override fun lastModifiedTime() = creationTime()
+            }
         }
-        assertTrue(MediaIndexPolicy.confirmedMissing(root, rows, existing, existing).isEmpty())
-    }
-
-    @Test fun cleanupNeverCrossesMountBoundaryOrFollowsTraversal() {
-        val rows = listOf("${root}2/file.jpg", "$root/../Camera/photo.jpg", "$root/sub/../../photo.jpg",
-            "$root//photo.jpg", "$root/sub\\photo.jpg", "$root/photo\n.jpg", "$root", "/DCIM/NAS_test/a.jpg")
-            .mapIndexed { index, path -> MediaIndexEntry(index.toLong(), path) }
-        assertTrue(MediaIndexPolicy.missing(root, rows, snapshot()).isEmpty())
-        assertNull(MediaIndexPolicy.relativePath("/storage/emulated/0", "/storage/emulated/0/photo.jpg"))
-    }
-
-    @Test fun changedMountOrChangingNasBlocksCleanup() {
-        val rows = listOf(MediaIndexEntry(44, "$root/deleted.png"))
-        rejects { MediaIndexPolicy.confirmedMissing(root, rows, snapshot(), snapshot().copy(mountIdentity = "12:13:0:30:102")) }
-        rejects { MediaIndexPolicy.confirmedMissing(root, rows, snapshot("deleted.png"), snapshot()) }
-        rejects { MediaIndexPolicy.confirmedMissing(root, rows, snapshot(), snapshot("new.png")) }
-    }
-
-    @Test fun restoredFileBetweenSnapshotsIsProtected() {
-        val rows = listOf(MediaIndexEntry(44, "$root/photo.jpg"))
-        rejects { MediaIndexPolicy.confirmedMissing(root, rows, snapshot(), snapshot("photo.jpg")) }
-    }
-
-    @Test fun incompleteOrFailedListingsAreRejected() {
-        listOf("[]", "GATEWAY_SNAPSHOT 10:11:0:29:101\n[]", listing("["), listing("[]", "12:13:0:30:102"),
-            listing("[]\nconnection failed"), listing("[]\n[]"), listing("{\"error\":\"offline\"}"))
-            .forEach { output -> rejects { RemoteSnapshot.parse(output) } }
-    }
-
-    @Test fun malformedAndDeepRemotePathsBlockCleanup() {
-        listOf("../escape.jpg", "/absolute.jpg", "sub//a.jpg", (1..33).joinToString("/") { "sub" }).forEach { path ->
-            rejects { RemoteSnapshot.parse(listing("[{\"Path\":\"$path\",\"IsDir\":false}]")) }
+        override fun children(path: Path, accept: (Path) -> Unit) {
+            if (path in badDirectories) throw IOException("unreadable directory")
+            nodes.keys.filter { it != root && it.parent == path }.forEach(accept)
         }
-        rejects { RemoteSnapshot.parse(listing("[{\"Path\":\"photo.jpg\"}]")) }
+        override fun readable(path: Path): Boolean {
+            if (path in badReads) throw IOException("bad file")
+            return nodes.containsKey(path)
+        }
     }
-
-    @Test fun completeListingAcceptsSpacesChineseAndDirectories() {
-        val parsed = RemoteSnapshot.parse(listing("[{\"Path\":\"旅行\",\"IsDir\":true},{\"Path\":\"旅行/照片 1.JPG\",\"IsDir\":false}]"))
-        assertEquals(setOf("旅行", "旅行/照片 1.jpg"), parsed.paths)
+    private class FakeMedia(val fs: FakeFiles) : ScanMedia {
+        val records = mutableListOf<MediaIndexEntry>()
+        val scanned = mutableListOf<String>()
+        var onScan: (String) -> Unit = {}
+        override suspend fun scan(path: String): MediaScan {
+            scanned += path
+            onScan(path)
+            val exists = fs.nodes.containsKey(Paths.get(path))
+            if (!exists) records.removeAll { it.path == path }
+            return MediaScan(true, exists, exists)
+        }
+        override fun entries(accept: (MediaIndexEntry) -> Unit) { records.toList().forEach(accept) }
+        override fun indexExists(id: Long) = records.any { it.id == id }
     }
-
-    @Test fun oversizedListingAndMassCleanupAreRejected() {
-        val json = (0..RemoteSnapshot.MAX_ENTRIES).joinToString(",", "[", "]") { "{\"Path\":\"$it.jpg\",\"IsDir\":false}" }
-        rejects { RemoteSnapshot.parse(listing(json)) }
-        rejects { RemoteSnapshot.parse("x".repeat(RemoteSnapshot.MAX_OUTPUT + 1)) }
-        val rows = (0..MediaIndexPolicy.MAX_CLEANUP).map { MediaIndexEntry(it.toLong(), "$root/$it.jpg") }
-        rejects { MediaIndexPolicy.confirmedMissing(root, rows, snapshot(), snapshot()) }
+    @Test fun streamsOverTenThousandEntriesAndFourMiBWithDeepPaths() = store().use { index ->
+        val longName = "x".repeat(420)
+        val entries = (0..11000).joinToString(",", "[", "]") { """{"Path":"$longName/$it.jpg","IsDir":false}""" }
+        assertTrue(entries.length > 4 * 1024 * 1024)
+        val parsed = RemoteSnapshot.read(listing(entries).reader(), 0, index)
+        assertTrue(parsed.complete)
+        assertEquals(11001L, index.count(0))
+        val deep = (1..40).joinToString("/") { "d" } + "/a.jpg"
+        assertTrue(RemoteSnapshot.read(listing("""[{"Path":"$deep","IsDir":false}]""").reader(), 1, index).complete)
     }
-
-    @Test fun missingFileScanCannotRemoveSamePrefixMediaOrNonMediaRows() {
-        val deleted = MediaIndexEntry(44, "$root/photo.jpg")
-        val backup = MediaIndexEntry(45, "$root/photo.jpg.backup.png")
-        val audio = MediaIndexEntry(46, "$root/photo.jpg.audio.mp3", 2)
-        val document = MediaIndexEntry(47, "$root/photo.jpg.notes.txt", 0)
-        assertTrue(MediaIndexPolicy.hasScanPrefixCollision(root, deleted, listOf(deleted, backup), snapshot()))
-        assertTrue(MediaIndexPolicy.hasScanPrefixCollision(root, deleted, listOf(deleted, audio, document), snapshot()))
-        assertTrue(MediaIndexPolicy.hasScanPrefixCollision(root, deleted, listOf(deleted), snapshot("PHOTO.JPG.backup.png")))
-        assertFalse(MediaIndexPolicy.hasScanPrefixCollision(root, deleted, listOf(deleted), snapshot("photo2.jpg")))
-        assertTrue(MediaIndexPolicy.missing(root, listOf(audio, document), snapshot()).isEmpty())
+    @Test fun malformedIncompleteAndChangedIdentityNeverComplete() = store().use { index ->
+        for (text in listOf(listing("["), listing("[]", "12:13:0:30:102:ro"), listing("[]") + "garbage",
+            listing("""[{"Path":"../bad","IsDir":false}]"""), listing("""[{"Path":"a.jpg"}]"""),
+            listing("""[{"Path":"/absolute","IsDir":false}]"""))) {
+            assertFalse(text, RemoteSnapshot.read(text.reader(), 0, index).complete)
+        }
+        assertThrows(IllegalArgumentException::class.java) { RemoteSnapshot.read("[]".reader(), 0, index) }
+    }
+    @Test fun unicodeHiddenAndPrefixCollisionsRetainRecords() = store().use { index ->
+        index.addPath(0, "CAFÉ.JPG", false)
+        index.addPath(0, ".hidden.jpg", false)
+        assertTrue(index.contains(0, "cafe\u0301.jpg"))
+        val deleted = MediaIndexEntry(1, "$root/photo.jpg")
+        index.addMedia(root.toString(), deleted)
+        index.addMedia(root.toString(), MediaIndexEntry(2, "$root/photo.jpg.audio.mp3", 2))
+        assertTrue(index.prefixCollision(root.toString(), deleted, 0))
+        val other = MediaIndexEntry(3, "$root/other_.jpg")
+        index.addMedia(root.toString(), other)
+        index.addPath(0, "OTHER_.JPG.backup.png", false)
+        assertTrue(index.prefixCollision(root.toString(), other, 0))
+        assertFalse(MediaIndexPolicy.validRelativePath("../a"))
+        assertNull(MediaIndexPolicy.relativePath(root.toString(), "${root}2/a.jpg"))
+    }
+    @Test fun scansMoreThanFiveHundredAndTenThousandBeyondFourMinutes() = runBlocking {
+        store().use { index ->
+            val fs = FakeFiles(root)
+            index.batch { tick -> for (i in 0..10550) {
+                val name = "$i." + if (i < 551) "jpg" else "txt"
+                fs.add(name); index.addPath(0, name, false); tick()
+            } }
+            val media = FakeMedia(fs)
+            media.onScan = { ShadowSystemClock.advanceBy(Duration.ofSeconds(1)) }
+            val before = android.os.SystemClock.elapsedRealtime()
+            val result = ScanEngine(index, media, fs).scan(root, snapshot(), { snapshot() }, {}, {})
+            assertEquals(551, media.scanned.size)
+            assertTrue(result, result.startsWith("完成"))
+            assertTrue(result.contains("已遍历 10552"))
+            assertTrue(android.os.SystemClock.elapsedRealtime() - before > 240000)
+        }
+    }
+    @Test fun traversesDeepDirectoriesWithoutRecursionLimit() = runBlocking {
+        store().use { index ->
+            val fs = FakeFiles(root)
+            var path = ""
+            repeat(40) { path += if (path.isEmpty()) "d" else "/d"; fs.add(path, true); index.addPath(0, path, true) }
+            fs.add("$path/a.jpg"); index.addPath(0, "$path/a.jpg", false)
+            val media = FakeMedia(fs)
+            ScanEngine(index, media, fs).scan(root, snapshot(), { snapshot() }, {}, {})
+            assertEquals(listOf("$root/$path/a.jpg"), media.scanned)
+        }
+    }
+    @Test fun healthyEmptyNasCleansMoreThanFiveHundredRows() = runBlocking {
+        store().use { index ->
+            val fs = FakeFiles(root); val media = FakeMedia(fs)
+            for (i in 0..600) media.records += MediaIndexEntry(i.toLong(), "$root/$i.jpg")
+            val result = ScanEngine(index, media, fs).scan(root, snapshot(), { snapshot(1) }, {}, {})
+            assertEquals(601, media.scanned.size)
+            assertTrue(media.records.isEmpty())
+            assertTrue(result, result.contains("已清理 601"))
+        }
+    }
+    @Test fun badFileAndDirectoryDoNotStopOtherFilesButBlockCleanup() = runBlocking {
+        store().use { index ->
+            val fs = FakeFiles(root)
+            fs.add("bad.jpg"); fs.add("good.jpg"); fs.add("denied", true)
+            fs.badReads.add(root.resolve("bad.jpg")); fs.badDirectories.add(root.resolve("denied"))
+            for (name in listOf("bad.jpg", "good.jpg", "denied")) index.addPath(0, name, name == "denied")
+            val media = FakeMedia(fs); media.records += MediaIndexEntry(1, "$root/deleted.jpg")
+            val result = ScanEngine(index, media, fs).scan(root, snapshot(), { error("must not reconcile") }, {}, {})
+            assertEquals(listOf("$root/good.jpg"), media.scanned)
+            assertTrue(result.contains("部分完成")); assertTrue(result.contains("失败 2"))
+            assertEquals(1, media.records.size)
+        }
+    }
+    @Test fun incompleteInventoryStillScansReadableFilesWithoutCleanup() = runBlocking {
+        store().use { index ->
+            val fs = FakeFiles(root); fs.add("good.jpg")
+            val media = FakeMedia(fs); media.records += MediaIndexEntry(1, "$root/missing.jpg")
+            val result = ScanEngine(index, media, fs).scan(root, snapshot(complete = false), { error("must not reconcile") }, {}, {})
+            assertEquals(listOf("$root/good.jpg"), media.scanned)
+            assertTrue(result.startsWith("部分完成")); assertEquals(1, media.records.size)
+        }
+    }
+    @Test fun changingInventoryProtectsDeletedRows() = runBlocking {
+        store().use { index ->
+            val fs = FakeFiles(root); val media = FakeMedia(fs)
+            media.records += MediaIndexEntry(1, "$root/deleted.jpg")
+            val result = ScanEngine(index, media, fs).scan(root, snapshot(), {
+                index.addPath(1, "restored.jpg", false); snapshot(1)
+            }, {}, {})
+            assertTrue(result.startsWith("部分完成")); assertTrue(media.scanned.isEmpty())
+        }
+    }
+    @Test fun cancellationStopsSubmissionAndSkipsCleanup() = runBlocking {
+        store().use { index ->
+            val fs = FakeFiles(root)
+            for (i in 0..10) { fs.add("$i.jpg"); index.addPath(0, "$i.jpg", false) }
+            val media = FakeMedia(fs)
+            media.onScan = { throw CancellationException("cancel") }
+            try { ScanEngine(index, media, fs).scan(root, snapshot(), { error("must not reconcile") }, {}, {}); fail() }
+            catch (_: CancellationException) { }
+            assertEquals(1, media.scanned.size)
+        }
+    }
+    @Test fun mountChangeStopsBeforeCleanup() = runBlocking {
+        store().use { index ->
+            val fs = FakeFiles(root); val media = FakeMedia(fs)
+            media.records += MediaIndexEntry(1, "$root/deleted.jpg")
+            try { ScanEngine(index, media, fs).scan(root, snapshot(), { snapshot(1).copy(mountIdentity = "12:13:0:30:102:rw") }, {}, {}); fail() }
+            catch (_: IllegalStateException) { }
+            assertTrue(media.scanned.isEmpty())
+        }
+    }
+    @Test fun temporaryDatabaseIsRemovedAndOrphansRecovered() {
+        val directory = File(RuntimeEnvironment.getApplication().cacheDir, "scan-tests")
+        directory.mkdirs(); File(directory, "scan-orphan.db").writeText("incomplete")
+        ScanIndex(directory).use { assertFalse(File(directory, "scan-orphan.db").exists()) }
+        assertTrue(directory.listFiles().orEmpty().isEmpty())
     }
 }

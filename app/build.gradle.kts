@@ -10,8 +10,8 @@ android {
         applicationId = "io.github.forensax.nasphotosgateway"
         minSdk = 28
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.1.2"
+        versionCode = 4
+        versionName = "0.1.3"
     }
     providers.environmentVariable("NAS_GATEWAY_DEBUG_KEYSTORE_PATH").orNull?.let { keystorePath ->
         signingConfigs.getByName("debug") {
@@ -28,7 +28,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     lint { abortOnError = true }
-    testOptions { unitTests.isReturnDefaultValues = true }
+    testOptions { unitTests.isReturnDefaultValues = true; unitTests.isIncludeAndroidResources = true }
 }
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.04.01"))
@@ -41,4 +41,5 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    testImplementation("org.robolectric:robolectric:4.14.1")
 }

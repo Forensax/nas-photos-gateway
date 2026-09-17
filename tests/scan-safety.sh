@@ -34,14 +34,14 @@ base_table() {
 }
 base_table
 prepare_scan > "$TMP/healthy"
-grep -qx 'GATEWAY_SNAPSHOT_END 10:11:0:29:101' "$TMP/healthy"
+grep -q '"end":"10:11:0:29:101:ro"}' "$TMP/healthy"
 test "$(cat "$TMP/signals")" = '-HUP 101'
 # Neither a failed connection nor a partial listing may acquire a completion marker.
 for failure in offline partial changed; do
     base_table
     export SIMULATE="$failure"
     if (snapshot_gateway) > "$TMP/failed" 2>/dev/null; then echo "FAIL: $failure accepted"; exit 1; fi
-    if grep -q '^GATEWAY_SNAPSHOT_END ' "$TMP/failed"; then echo 'FAIL: failed listing marked complete'; exit 1; fi
+    if grep -q '"end":' "$TMP/failed"; then echo 'FAIL: failed listing marked complete'; exit 1; fi
 done
 export SIMULATE=ok
 base_table
@@ -58,4 +58,10 @@ sed 's/^11 1 0:29/11 1 0:30/' "$MOUNTINFO" > "$TMP/new"
 cat "$TMP/new" > "$MOUNTINFO"
 if (prepare_scan) > /dev/null; then echo 'FAIL: unrelated FUSE target accepted'; exit 1; fi
 test "$before" = "$(wc -l < "$TMP/signals")"
+base_table
+sed 's/ ro / rw /g; s/ ro$/ rw/' "$MOUNTINFO" > "$TMP/new"
+cat "$TMP/new" > "$MOUNTINFO"
+if (prepare_scan) >/dev/null; then echo 'FAIL: mode mismatch accepted'; exit 1; fi
+ALLOW_DELETE=true prepare_scan > "$TMP/writable"
+grep -q '"end":"10:11:0:29:101:rw"}' "$TMP/writable"
 echo 'Scan inventory safety checks passed'

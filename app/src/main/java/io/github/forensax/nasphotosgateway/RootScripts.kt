@@ -12,6 +12,7 @@ object RootScripts {
             appendLine("SOURCE=${shellQuote(SOURCE)}")
             appendLine("RCLONE=${shellQuote(config.rclonePath)}")
             appendLine("REMOTE=${shellQuote(config.remote)}")
+            appendLine("ALLOW_DELETE=${shellQuote(config.allowDelete.toString())}")
             if (credentials) {
                 appendLine("[ -x \"\$RCLONE\" ] || { echo '找不到 rclone，请安装 FUSE Magisk 模块并检查路径'; exit 10; }")
                 appendLine("export RCLONE_CONFIG=/dev/null")
