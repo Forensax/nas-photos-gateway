@@ -29,9 +29,11 @@ class MediaIndexPolicyTest {
         val nodes = linkedMapOf(root to true)
         val badReads = mutableSetOf<Path>()
         val badDirectories = mutableSetOf<Path>()
+        val badAttributes = mutableSetOf<Path>()
         val links = mutableSetOf<Path>()
         fun add(relative: String, dir: Boolean = false) { nodes[root.resolve(relative)] = dir }
         override fun attributes(path: Path): BasicFileAttributes {
+            if (path in badAttributes) throw IOException("cannot stat path")
             val directory = nodes[path] ?: throw NoSuchFileException(path.toString())
             return object : BasicFileAttributes {
                 override fun isDirectory() = directory
@@ -197,5 +199,37 @@ class MediaIndexPolicyTest {
         directory.mkdirs(); File(directory, "scan-orphan.db").writeText("incomplete")
         ScanIndex(directory).use { assertFalse(File(directory, "scan-orphan.db").exists()) }
         assertTrue(directory.listFiles().orEmpty().isEmpty())
+    }
+    @Test fun symlinkNeverReachesMediaScanner() = runBlocking {
+        store().use { index ->
+            val fs = FakeFiles(root); fs.add("link.jpg"); fs.links.add(root.resolve("link.jpg"))
+            index.addPath(0, "link.jpg", false)
+            val media = FakeMedia(fs)
+            try { ScanEngine(index, media, fs).scan(root, snapshot(), { snapshot(1) }, {}, {}); fail() }
+            catch (_: IllegalStateException) { }
+            assertTrue(media.scanned.isEmpty())
+        }
+    }
+    @Test fun allCleanupPathsAreCheckedBeforeFirstDeletion() = runBlocking {
+        store().use { index ->
+            val fs = FakeFiles(root); fs.badAttributes.add(root.resolve("bad"))
+            val media = FakeMedia(fs)
+            media.records += MediaIndexEntry(1, "$root/a.jpg")
+            media.records += MediaIndexEntry(2, "$root/bad/z.jpg")
+            try { ScanEngine(index, media, fs).scan(root, snapshot(), { snapshot(1) }, {}, {}); fail() }
+            catch (_: IOException) { }
+            assertTrue(media.scanned.isEmpty()); assertEquals(2, media.records.size)
+        }
+    }
+    @Test fun cleanupFailureStopsSubsequentSubmissions() = runBlocking {
+        store().use { index ->
+            val fs = FakeFiles(root); val media = FakeMedia(fs)
+            media.records += MediaIndexEntry(1, "$root/a.jpg")
+            media.records += MediaIndexEntry(2, "$root/b.jpg")
+            media.onScan = { throw IOException("scan failed") }
+            try { ScanEngine(index, media, fs).scan(root, snapshot(), { snapshot(1) }, {}, {}); fail() }
+            catch (_: IOException) { }
+            assertEquals(1, media.scanned.size); assertEquals(2, media.records.size)
+        }
     }
 }
